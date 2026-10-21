@@ -105,7 +105,7 @@
       status.textContent = "Loggar in...";
 
       try {
-        site = prompt("Skriv port url")
+        const site = prompt("Skriv port url")
         const response = await fetch(site, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
