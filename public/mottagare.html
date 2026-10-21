@@ -103,9 +103,9 @@
       if (socket) socket.disconnect();
       sound.disabled = true;
       status.textContent = "Loggar in...";
-
+site = promt("Skriv port url")
       try {
-        const response = await fetch("https://literate-potato-g4975r4p54p6fwgrq-3000.app.github.dev/", {
+        const response = await fetch(site, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ code: code.value })
