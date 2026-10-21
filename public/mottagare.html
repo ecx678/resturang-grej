@@ -1,0 +1,160 @@
+
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Beställningsmottagare</title>
+  <script src="/socket.io/socket.io.js"></script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 700px;
+      margin: 30px auto;
+      padding: 20px;
+    }
+    input, button {
+      padding: 12px;
+      margin: 6px 0;
+      font-size: 16px;
+    }
+    #orders p {
+      padding: 14px;
+      background: #f0f4f8;
+      border-radius: 8px;
+    }
+    #status { font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>Beställningar</h1>
+
+  <form id="login">
+    <label for="code">Åtkomstkod</label><br>
+    <input id="code" type="password" required
+      autocomplete="current-password">
+    <button type="submit">Logga in</button>
+  </form>
+
+  <button id="sound" disabled>Aktivera ljud</button>
+  <p id="status" role="status">Logga in för att ansluta.</p>
+
+  <h2>Inkomna beställningar</h2>
+  <div id="orders" aria-live="polite"></div>
+
+  <script>
+    const login = document.getElementById("login");
+    const code = document.getElementById("code");
+    const sound = document.getElementById("sound");
+    const status = document.getElementById("status");
+    const orders = document.getElementById("orders");
+
+    let socket;
+    let audioContext;
+    let soundEnabled = false;
+
+    async function beep() {
+      if (!soundEnabled || !audioContext) return;
+
+      if (audioContext.state === "suspended") {
+        await audioContext.resume();
+      }
+
+      [880, 1100, 880].forEach((frequency, i) => {
+        const start = audioContext.currentTime + i * 0.22;
+        const oscillator = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+
+        oscillator.type = "sine";
+        oscillator.frequency.value = frequency;
+
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.exponentialRampToValueAtTime(0.2, start + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.16);
+
+        oscillator.connect(gain);
+        gain.connect(audioContext.destination);
+        oscillator.start(start);
+        oscillator.stop(start + 0.17);
+      });
+    }
+
+    sound.addEventListener("click", async () => {
+      try {
+        audioContext = audioContext ||
+          new (window.AudioContext || window.webkitAudioContext)();
+
+        await audioContext.resume();
+        soundEnabled = true;
+        await beep();
+
+        sound.textContent = "Ljud aktiverat";
+        status.textContent = socket?.connected
+          ? "Ansluten. Väntar på beställningar."
+          : "Ljudet är aktivt. Ansluter...";
+      } catch {
+        status.textContent = "Kunde inte aktivera ljud.";
+      }
+    });
+
+    login.addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      if (socket) socket.disconnect();
+      sound.disabled = true;
+      status.textContent = "Loggar in...";
+
+      try {
+        const response = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code: code.value })
+        });
+
+        const result = await response.json();
+        if (!response.ok) {
+          throw new Error(result.error || "Inloggningen misslyckades.");
+        }
+
+        code.value = "";
+        sound.disabled = false;
+
+        socket = io({ auth: { token: result.token } });
+
+        socket.on("connect", () => {
+          status.textContent = soundEnabled
+            ? "Ansluten. Väntar på beställningar."
+            : "Ansluten. Aktivera ljudet.";
+        });
+
+        socket.on("connect_error", () => {
+          status.textContent = "Anslutningen nekades. Logga in igen.";
+          sound.disabled = true;
+        });
+
+        socket.on("disconnect", () => {
+          status.textContent = "Frånkopplad. Försöker återansluta...";
+        });
+
+        socket.on("ny-bestallning", async (order) => {
+          const row = document.createElement("p");
+          row.textContent =
+            `${new Date(order.tid).toLocaleTimeString("sv-SE")} – ` +
+            `${order.artikel}, antal: ${order.antal}`;
+          orders.prepend(row);
+
+          try {
+            await beep();
+          } catch {
+            status.textContent =
+              "Beställningen kom fram, men ljudet kunde inte spelas.";
+          }
+        });
+
+      } catch (error) {
+        status.textContent = error.message || "Inloggningen misslyckades.";
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,80 @@
+
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Skicka beställning</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      max-width: 500px;
+      margin: 40px auto;
+      padding: 20px;
+    }
+    input, button {
+      display: block;
+      box-sizing: border-box;
+      width: 100%;
+      padding: 12px;
+      margin: 10px 0;
+      font-size: 16px;
+    }
+    button { cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>Ny beställning</h1>
+
+  <form id="form">
+    <label for="artikel">Artikel</label>
+    <input id="artikel" value="Pizza" maxlength="100" required>
+
+    <label for="antal">Antal</label>
+    <input id="antal" type="number" value="1"
+      min="1" max="100" required>
+
+    <button id="send" type="submit">Skicka beställning</button>
+  </form>
+
+  <p id="status" role="status"></p>
+
+  <script>
+    const form = document.getElementById("form");
+    const status = document.getElementById("status");
+    const send = document.getElementById("send");
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      send.disabled = true;
+      status.textContent = "Skickar...";
+
+      try {
+        const response = await fetch("/api/bestallning", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            artikel: document.getElementById("artikel").value.trim(),
+            antal: Number(document.getElementById("antal").value)
+          })
+        });
+
+        const result = await response.json();
+
+        if (!response.ok) {
+          throw new Error(result.error || "Beställningen misslyckades.");
+        }
+
+        status.textContent =
+          `Beställning skickad: ${result.bestallning.artikel}, ` +
+          `antal ${result.bestallning.antal}.`;
+      } catch {
+        status.textContent =
+          "Fel vid skickandet. Kontrollera anslutningen och försök igen.";
+      } finally {
+        send.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
