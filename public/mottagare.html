@@ -5,67 +5,166 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Beställningsmottagare</title>
+
   <style>
     body {
       font-family: Arial, sans-serif;
       max-width: 700px;
       margin: 30px auto;
       padding: 20px;
+      color: #222;
     }
+
     input, button {
+      box-sizing: border-box;
       padding: 12px;
       margin: 6px 0;
       font-size: 16px;
     }
+
+    input {
+      max-width: 100%;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.5;
+    }
+
+    #serverUrl {
+      width: 100%;
+    }
+
     #orders p {
       padding: 14px;
       background: #f0f4f8;
       border-radius: 8px;
+      overflow-wrap: anywhere;
     }
-    #status { font-weight: bold; }
+
+    #status {
+      font-weight: bold;
+      overflow-wrap: anywhere;
+    }
+
+    .field {
+      margin: 14px 0;
+    }
   </style>
 </head>
+
 <body>
   <h1>Beställningar</h1>
 
   <form id="login">
-    <label for="serverUrl">Serveradress från Codespaces</label><br>
-    <input id="serverUrl" type="url"
-      placeholder="https://....app.github.dev"
-      required style="width:90%">
-    <br>
+    <div class="field">
+      <label for="serverUrl">Serveradress från Codespaces</label><br>
+      <input
+        id="serverUrl"
+        type="url"
+        placeholder="https://....app.github.dev"
+        autocomplete="url"
+        required
+      >
+      <p>
+        Kopiera adressen för port 3000 från fliken Ports i Codespaces.
+        Ange grundadressen, utan /socket.io/socket.io.js.
+      </p>
+    </div>
 
-    <label for="code">Åtkomstkod</label><br>
-    <input id="code" type="password" required
-      autocomplete="current-password">
-    <button type="submit">Logga in</button>
+    <div class="field">
+      <label for="code">Åtkomstkod</label><br>
+      <input
+        id="code"
+        type="password"
+        autocomplete="current-password"
+        required
+      >
+    </div>
+
+    <button id="loginButton" type="submit">Logga in</button>
   </form>
 
-  <button id="sound" disabled>Aktivera ljud</button>
-  <p id="status" role="status">Ange serveradress och logga in.</p>
+  <button id="sound" type="button" disabled>Aktivera ljud</button>
+
+  <p id="status" role="status" aria-live="polite">
+    Ange serveradress och åtkomstkod.
+  </p>
 
   <h2>Inkomna beställningar</h2>
   <div id="orders" aria-live="polite"></div>
 
   <script>
     const login = document.getElementById("login");
-    const code = document.getElementById("code");
-    const serverUrl = document.getElementById("serverUrl");
-    const sound = document.getElementById("sound");
+    const serverUrlInput = document.getElementById("serverUrl");
+    const codeInput = document.getElementById("code");
+    const loginButton = document.getElementById("loginButton");
+    const soundButton = document.getElementById("sound");
     const status = document.getElementById("status");
     const orders = document.getElementById("orders");
 
-    let socket;
-    let audioContext;
+    let socket = null;
+    let audioContext = null;
     let soundEnabled = false;
+    let currentServer = "";
 
-    function loadSocketIO(url) {
+    function setStatus(message) {
+      status.textContent = message;
+    }
+
+    function normalizeServerUrl(value) {
+      const parsed = new URL(value.trim());
+
+      if (parsed.protocol !== "https:" &&
+          parsed.hostname !== "localhost") {
+        throw new Error(
+          "Serveradressen måste använda HTTPS."
+        );
+      }
+
+      if (parsed.username || parsed.password) {
+        throw new Error(
+          "Serveradressen får inte innehålla användarnamn eller lösenord."
+        );
+      }
+
+      return parsed.origin;
+    }
+
+    function loadSocketIO(base) {
+      if (typeof window.io === "function" &&
+          window.__socketIoSource === base) {
+        return Promise.resolve();
+      }
+
       return new Promise((resolve, reject) => {
         const script = document.createElement("script");
-        script.src = url.replace(/\/+$/, "") + "/socket.io/socket.io.js";
-        script.onload = resolve;
-        script.onerror = () =>
-          reject(new Error("Kunde inte ladda Socket.IO från servern."));
+
+        script.src = base + "/socket.io/socket.io.js";
+        script.async = true;
+
+        script.onload = () => {
+          if (typeof window.io === "function") {
+            window.__socketIoSource = base;
+            resolve();
+          } else {
+            reject(new Error(
+              "Skriptet laddades, men Socket.IO-funktionen saknas."
+            ));
+          }
+        };
+
+        script.onerror = () => {
+          reject(new Error(
+            "Kunde inte ladda Socket.IO från " + script.src +
+            ". Kontrollera serveradressen, port 3000 och att servern körs."
+          ));
+        };
+
         document.head.appendChild(script);
       });
     }
@@ -77,111 +176,158 @@
         await audioContext.resume();
       }
 
-      [880, 1100, 880].forEach((frequency, i) => {
-        const start = audioContext.currentTime + i * 0.22;
+      [880, 1100, 880].forEach((frequency, index) => {
+        const start = audioContext.currentTime + index * 0.22;
         const oscillator = audioContext.createOscillator();
         const gain = audioContext.createGain();
 
         oscillator.type = "sine";
         oscillator.frequency.value = frequency;
+
         gain.gain.setValueAtTime(0.0001, start);
         gain.gain.exponentialRampToValueAtTime(0.2, start + 0.02);
         gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.16);
 
         oscillator.connect(gain);
         gain.connect(audioContext.destination);
+
         oscillator.start(start);
         oscillator.stop(start + 0.17);
       });
     }
 
-    sound.addEventListener("click", async () => {
+    soundButton.addEventListener("click", async () => {
       try {
         audioContext = audioContext ||
           new (window.AudioContext || window.webkitAudioContext)();
+
         await audioContext.resume();
         soundEnabled = true;
         await beep();
-        sound.textContent = "Ljud aktiverat";
-        status.textContent = socket?.connected
-          ? "Ansluten. Väntar på beställningar."
-          : "Ljudet är aktiverat.";
-      } catch {
-        status.textContent = "Kunde inte aktivera ljud.";
+
+        soundButton.textContent = "Ljud aktiverat";
+
+        setStatus(socket?.connected
+          ? "Ansluten. Ljudet är aktiverat. Väntar på beställningar."
+          : "Ljudet är aktiverat. Väntar på anslutning.");
+      } catch (error) {
+        setStatus("Kunde inte aktivera ljud: " + error.message);
       }
     });
 
     login.addEventListener("submit", async (event) => {
       event.preventDefault();
 
-      if (socket) socket.disconnect();
-      sound.disabled = true;
-      status.textContent = "Loggar in...";
+      loginButton.disabled = true;
+      soundButton.disabled = true;
+      setStatus("Ansluter till servern...");
+
+      if (socket) {
+        socket.disconnect();
+        socket = null;
+      }
 
       try {
-        const base = serverUrl.value.trim().replace(/\/+$/, "");
-        const parsed = new URL(base);
+        const base = normalizeServerUrl(serverUrlInput.value);
+        currentServer = base;
 
-        if (parsed.protocol !== "https:" &&
-            parsed.hostname !== "localhost") {
-          throw new Error("Använd serverns HTTPS-adress från Codespaces.");
-        }
-
+        // Kontrollera att Socket.IO-biblioteket går att hämta.
+        setStatus("Kontrollerar Socket.IO...");
         await loadSocketIO(base);
 
+        // Logga in mot serverns riktiga endpoint.
+        setStatus("Loggar in...");
         const response = await fetch(base + "/api/login", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ code: code.value })
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            code: codeInput.value
+          })
         });
+
+        const contentType = response.headers.get("content-type") || "";
+
+        if (!contentType.includes("application/json")) {
+          throw new Error(
+            "Servern returnerade inte JSON vid inloggningen. " +
+            "Kontrollera att adressen går till Node.js-servern, inte GitHub Pages."
+          );
+        }
 
         const result = await response.json();
 
         if (!response.ok) {
-          throw new Error(result.error || "Inloggningen misslyckades.");
+          throw new Error(
+            result.error || "Inloggningen misslyckades."
+          );
         }
 
-        code.value = "";
-        sound.disabled = false;
+        if (!result.token) {
+          throw new Error("Servern skickade ingen inloggningstoken.");
+        }
 
-        socket = io(base, {
-          auth: { token: result.token },
+        codeInput.value = "";
+        soundButton.disabled = false;
+
+        setStatus("Inloggad. Ansluter till beställningsservern...");
+
+        socket = window.io(base, {
+          auth: {
+            token: result.token
+          },
           transports: ["websocket", "polling"]
         });
 
         socket.on("connect", () => {
-          status.textContent = soundEnabled
+          setStatus(soundEnabled
             ? "Ansluten. Väntar på beställningar."
-            : "Ansluten. Klicka på Aktivera ljud.";
+            : "Ansluten. Klicka på Aktivera ljud.");
         });
 
         socket.on("connect_error", (error) => {
-          status.textContent = "Anslutningsfel: " + error.message;
+          setStatus(
+            "Socket.IO-anslutningen misslyckades: " +
+            error.message +
+            ". Kontrollera att servern körs och att porten är åtkomlig."
+          );
         });
 
-        socket.on("disconnect", () => {
-          status.textContent = "Frånkopplad. Försöker återansluta...";
+        socket.on("disconnect", (reason) => {
+          setStatus(
+            "Frånkopplad (" + reason +
+            "). Försöker återansluta..."
+          );
         });
 
         socket.on("ny-bestallning", async (order) => {
           const row = document.createElement("p");
+
+          const time = order.tid
+            ? new Date(order.tid).toLocaleTimeString("sv-SE")
+            : new Date().toLocaleTimeString("sv-SE");
+
           row.textContent =
-            `${new Date(order.tid).toLocaleTimeString("sv-SE")} – ` +
-            `${order.artikel}, antal: ${order.antal}`;
+            time + " – " +
+            String(order.artikel || "Okänd artikel") +
+            ", antal: " + String(order.antal ?? "?");
+
           orders.prepend(row);
 
           try {
             await beep();
-          } catch {
-            status.textContent =
-              "Beställningen kom fram, men ljudet kunde inte spelas.";
+          } catch (error) {
+            setStatus(
+              "Beställningen kom fram, men ljudet kunde inte spelas."
+            );
           }
         });
+
       } catch (error) {
-        status.textContent =
-          error.message === "Failed to fetch"
-            ? "Kunde inte nå servern. Kontrollera serveradressen och att servern körs."
-            : error.message;
+        setStatus(error.message || "Ett okänt fel inträffade.");
+      } finally {
+        loginButton.disabled = false;
       }
     });
   </script>
